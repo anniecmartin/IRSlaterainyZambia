@@ -1,0 +1,727 @@
+---
+title: "Public Pilot IRS Analysis"
+author: "A Martin"
+date: "2024-10-30"
+output: pdf_document
+---
+
+This document provides the code to do the descriptive analysis in the first few paragraphs of the results section of the below manuscript:
+
+Impact of late rainy season indoor residual spraying on holoendemic malaria transmission: a cohort study in northern Zambia
+
+The code for the regresion models is in a separate stata.do file.
+
+```{r setup, include=FALSE}
+knitr::opts_knit$set(root.dir = "/Users/annemartin/Documents/PhD/ICEMR/Nchelenge/Pilot IRS Manuscript/")
+knitr::opts_chunk$set(echo = FALSE)
+library(knitr)
+library(plyr)
+library(dplyr)
+library(tidyr)
+library(lubridate)
+library(readxl)
+library(table1)
+library(mice)
+library(ggplot2)
+library(sjPlot)
+library(geepack)
+library(lme4) 
+library(nlme)
+library(glmmTMB)
+library(gt)
+library(kableExtra)
+library(REDCapR)
+library(RCurl)
+library(geepack)
+library(lme4) 
+library(nlme)
+library(splines)
+library(optimx)
+library(marginaleffects)
+library(margins)
+library(geomtextpath)
+library(Hmisc) # load this last so that labels stick when subsetting
+```
+
+# Prep
+Import datasets
+```{r import datasets}
+primary <- read.csv("/Users/annemartin/Documents/PhD/ICEMR/Nchelenge/Pilot IRS/Drafts/July 2024 JID Submission/Final code and datasets/primary.csv")
+baseline_IRS <- read.csv("/Users/annemartin/Documents/PhD/ICEMR/Nchelenge/Pilot IRS/Drafts/July 2024 JID Submission/Final code and datasets/baseline_IRS.csv")
+IRS_cov <- read.csv("/Users/annemartin/Documents/PhD/ICEMR/Nchelenge/Pilot IRS/Drafts/July 2024 JID Submission/Final code and datasets/IRS_cov.csv")
+entomology <- read.csv("/Users/annemartin/Documents/PhD/ICEMR/Nchelenge/Pilot IRS/Drafts/July 2024 JID Submission/Final code and datasets/entomology.csv")
+anopheline <- read.csv(file="/Users/annemartin/Documents/PhD/ICEMR/Nchelenge/Pilot IRS/Drafts/July 2024 JID Submission/Final code and datasets/anopheline.csv") 
+
+#Filter baseline observations by taking the first observation for each individual
+primary_base <- primary %>%
+  filter(isparticipating==1) %>%
+  group_by(partid) %>%
+  slice(1) 
+```
+
+
+Run function to product p-values
+```{r pvalue FUNCTION}
+# Code source: https://cran.r-project.org/web/packages/table1/vignettes/table1-examples.html#example-a-column-of-p-values
+# Updated the categorical test to use Fisher's exact since sample is small.
+library(table1)
+pvalue <- function(x, ...) {
+    # Construct vectors of data y, and groups (strata) g
+    y <- unlist(x)
+    g <- factor(rep(1:length(x), times=sapply(x, length)))
+    if (is.numeric(y)) {
+        # For numeric variables, perform a standard 2-sample t-test
+        p <- t.test(y ~ g)$p.value
+    } else {
+        # For categorical variables, perform a chi-squared test of independence
+        p <- fisher.test(table(y, g))$p.value
+    }
+    # Format the p-value, using an HTML entity for the less-than sign.
+    # The initial empty string places the output on the line below the variable label.
+    c("", sub("<", "&lt;", format.pval(p, digits=3, eps=0.001)))
+    
+}
+```
+
+# Results paragraph 1
+Household count
+```{r hh count}
+## Count of unique households
+unique_hh <- primary %>%  # Build data frame with numbers of unique households who participated at least once
+  filter(isparticipating==1) %>%
+  group_by(hhnumber) %>%
+  summarise(count = n_distinct(hhnumber))
+nrow(unique_hh)
+
+```
+"Three hundred and eighty-two individuals from 64 households were enrolled."
+Individual unique count comes from Table 1, below
+
+Individuals per household
+```{r indiv per hh}
+summary(primary_base$TV.hhmemcount)
+
+## Distribution of visits per person, by pre-post, by arm
+
+#Overall
+visit_tot <- primary %>% 
+    filter(isparticipating==1) %>% # Removing missing
+    group_by(partid) %>% 
+    dplyr::summarise(visit_total = n())
+
+
+summary(visit_tot$visit_total)
+```
+"Each household had a median of six occupants (IQR 4-8), who on average, were available and participated in 3.4 of six total possible visits."
+
+Age distribution (years) and sex (proportion biologically male)
+```{r age years and sex}
+summary(primary_base$B.ageyears)
+
+summary(primary_base$B.sex)[4] # proportion male
+1- summary(primary_base$B.sex)[4] # proportion female
+```
+"The median age was 14 years (IQR 6-24) and the majority (58%) were female (Table 1). "
+
+Net usage by age category
+```{r net use by age}
+table(primary$B.agecat.factor)
+useagecounts<- table(primary$B.agecat.factor, primary$TV.netsleepln)
+useageprop<- useagecounts[,2]/(useagecounts[,1]+useagecounts[,2])
+useagecounts
+useageprop
+1-useageprop #nonusers
+
+```
+"Bed net usage differed by age group and was 92%, 62%, 50%, and 71% in those younger than one year, younger than five years, 6 – 16 years, and 17 years and older, respectively."
+
+"Baseline vector counts and parasite prevalence by all measures were balanced across arms, although there were cluster-level (i.e. not sprayed inland, sprayed inland, not sprayed lakeside, sprayed lakeside) differences in RDT and microscopy prevalence (ANOVA test p-values = 0.012 and <0.01, Figure S1) and household vector counts (p-value < 0.01, Figure 2)."
+
+```{r table 1 }
+library(htmlTable)
+library(tableone)
+
+# Create dataset and add labels for table
+dat <-primary_base %>% select(arm, B.ageyears , B.sex, B.residediffhome , B.mal.cause.know , TV.hlthlastmonth , TV.employmentyn , B.irscat, B.irsoctyn, TV.netsleepln , TV.nettimeown , TV.outnight, TV.hhmemcount , B.hheduclevel , hhhavebednet , hhbednetcnt , B.hheave , B.hhwall , B.hhrooftype, B.hhwatersrc , hhanimalspresent , B.distc , B.distr , B.dists1 , B.dists2 , B.dists3 , B.dists4 , B.dists5 , B.dists6, rdtresults, microresults, qpcrcall)
+label(dat$B.ageyears)<- "Age (y)"
+label(dat$B.sex)      <- "Sex"
+label(dat$B.residediffhome)<- "Reside elsewhere for part of year"
+label(dat$B.hhwatersrc)<- "Water Source"
+label(dat$B.mal.cause.know)<- "Knows mosquito bites cause malaria"
+label(dat$B.sex)      <- "Sex"
+label(dat$B.hheduclevel)<- "HH Head Level of Education"
+levels(dat$B.hheduclevel)=c("Primary","Secondary","Higher")
+label(dat$hhhavebednet)= "House has bednet"
+label(dat$B.irsoctyn)<- "Received IRS October 2022"
+label(dat$TV.netsleepln)<- "Slept under bednet last night"
+label(dat$TV.outnight)<- "Spends time away from home, outside after dusk"
+label(dat$TV.hhmemcount)<- "Number of people in household"
+label(dat$TV.hlthlastmonth) <- "Been to health facility in last month"
+label(dat$TV.employmentyn) <- "Employed"
+label(dat$TV.netsleepln) <- "Slept under bednet last night"
+label(dat$TV.nettimeown) <- "Time owning net"
+label(dat$TV.outnight) <- "Spends time outdoors after sundown"
+label(dat$hhbednetcnt)<- "Total nets owned by household"
+label(dat$B.hhwatersrc)<- "Household water source"
+label(dat$hhanimalspresent)<- "Household owns animals"
+#label(dat$hhappliance1)<- "Household owns radio"
+#label(dat$hhappliance2)<- "Household owns TV"
+#label(dat$hhappliance3)<- "Household owns refridgerator"
+#label(dat$hhappliance4)<- "Household owns phone"
+#label(dat$hhappliance5)<- "Household owns solar panels"
+label(dat$B.distc)<- "Distance from health center (km)"
+label(dat$B.distr)<- "Distance from road (km)"
+label(dat$B.dists1)<- "Category 1 (km)"
+label(dat$B.dists2)<- "Category 2 (km)"
+label(dat$B.dists3)<- "Category 3 (km)"
+label(dat$B.dists4)<- "Category 4 (km)"
+label(dat$B.dists5)<- "Category 5 (km)"
+label(dat$B.dists6)<- "Category 6 (km)"
+label(dat$microresults)<- "RDT Positive"
+label(dat$rdtresults)<- "Microscopy Positive"
+label(dat$qpcrcall)<- "qPCR Positive"
+
+# Modify factor levels for categorical variables
+dat_cat <- dat
+dat_cat$B.hhwall <- factor(dat_cat$B.hhwall,
+                                  levels = c(1, 2, 3, 4),
+                                  labels = c("Mud", "Concrete", "Wood", "Other"))
+dat_cat$B.hhrooftype <- factor(dat_cat$B.hhrooftype,
+                               levels = c(1, 2),
+                               labels = c("Thatched", "Metal sheets"))
+dat_cat$B.hhwatersrc <- factor(dat_cat$B.hhwatersrc,
+                               levels = c(1, 2, 4),
+                               labels = c("Piped water", "Well", "Other"))
+dat_cat$B.hheduclevel <- factor(dat_cat$B.hheduclevel,
+                               levels = c(1, 2),
+                               labels = c("Primary", "Secondary"))
+dat_cat$TV.nettimeown <- factor(dat_cat$TV.nettimeown,
+                               levels = c(1, 2, 3),
+                               labels = c("<1 month","1 month - 1 year","2 - 5 years"))
+dat_cat$B.irscat <- factor(dat_cat$B.irscat,
+                               levels = c(0, 1, 2, 3),
+                               labels = c("No IRS","Oct. Only","April Only", "Both Oct. & April"))
+label(dat_cat$B.hhwatersrc)<- "Water Source"
+label(dat_cat$B.hhrooftype)<- "Roof type"
+
+
+# Generate the table 1 using tableone with modified categorical variables
+table1 <- CreateTableOne(
+  vars = c("rdtresults", "microresults", "qpcrcall","B.ageyears", "B.sex", "B.residediffhome", "B.mal.cause.know", "TV.hlthlastmonth",
+           "TV.employmentyn","B.irsoctyn", "hhhavebednet", "hhbednetcnt", "TV.nettimeown", "TV.netsleepln",
+           "TV.outnight", "TV.hhmemcount", "B.hheduclevel",  "B.hheave",
+           "B.hhwall", "B.hhrooftype", "B.hhwatersrc", "hhanimalspresent",
+           "B.distc", "B.distr", "B.dists1", "B.dists2", "B.dists3", "B.dists4", "B.dists5",
+           "B.dists6"),
+  strata = "arm",
+  data = dat_cat,
+  addOverall = TRUE
+)
+t1<-print(table1, varLabels=TRUE)
+```
+
+Baseline vector and parasite measures
+```{r baseline vector and parasite}
+# Baseline differences in parasite prevalence
+## RDT
+rdt.chisq <- primary %>% dplyr::filter(studytime==0) %>% dplyr::filter(!is.na(B.Zone))
+chisq.test(table(rdt.chisq$rdtresults, rdt.chisq$arm)) # difference by arm at baseline
+chisq.test(table(rdt.chisq$rdtresults, rdt.chisq$B.Zone)) # difference by cluster at baselineff at baseline
+## Micro
+micro.chisq <- primary %>% dplyr::filter(studytime==0) %>% dplyr::filter(!is.na(B.Zone))
+chisq.test(table(micro.chisq$microresults, micro.chisq$arm)) # difference by arm at baseline
+chisq.test(table(micro.chisq$microresults, micro.chisq$B.Zone)) # difference by cluster at baseline
+## qPCR
+qpcr.chisq <- primary %>% dplyr::filter(studytime==0) %>% dplyr::filter(!is.na(B.Zone))
+chisq.test(table(qpcr.chisq$qpcrcall, qpcr.chisq$arm)) # difference by arm at baseline
+chisq.test(table(qpcr.chisq$qpcrcall, qpcr.chisq$B.Zone)) # difference by cluster at baseline
+
+# Baseline differences in vector counts
+anova.ento <- entomology %>% filter(studytime==0)
+summary(aov(mcolanophelesf ~ B.Zone, data =anova.ento)) # test for difference at baseline across cluster
+summary(aov(mcolanophelesf ~ arm, data =anova.ento)) # test for difference at baseline across arm
+
+
+```
+"Baseline vector counts and parasite prevalence by all measures were balanced across arms, although there were cluster-level (i.e. not sprayed inland, sprayed inland, not sprayed lakeside, sprayed lakeside) differences in RDT and microscopy prevalence (ANOVA test p-values = 0.012 and <0.01, Figure S1) and household vector counts (p-value < 0.01, Figure 2)."
+
+# Spray coverage
+October 2021
+```{r spray october}
+nrow(baseline_IRS) # Number of households surveyed in March 2022
+hhbyarm<- table(baseline_IRS$arm)
+hhbyarm[2] # total households in sprayed arm
+hhbyarm[1] # total households in unsprayed arm
+spraystatus <-table(baseline_IRS$irs_spray, baseline_IRS$arm)
+spraystatus[2,2] # Number of households in sprayed arm sprayed
+spraystatus[2,1] # Number of households in unsprayed arm sprayed
+
+spraystatus[2,2] /hhbyarm[2] # Number of households in sprayed arm sprayed / total households in sprayed arm
+spraystatus[2,1] /hhbyarm[1]# Number of households in unsprayed arm sprayed / total households in unsprayed arm
+```
+"Of the 50 households enrolled in March, 49 verified their October 2021 IRS campaign spray status. Only 34% (8/26) of intervention households and 36% (9/23) of control households reported having received IRS in October 2021 when the annual IRS campaign was conducted. "
+
+April 2022
+$100 * Sprayed/Sampled$
+```{r spray coverage}
+IRS_cov %>% 
+    group_by(Zone) %>%
+  summarise(Coverage = round(100*mean(irs_ntotal/5,na.rm = TRUE),2),
+            Sampled= 5*n()) # 4 neighbors + sampled household = 5
+
+```
+
+# Epidemiological results
+```{r rdt prev across}
+## RDT Period prevelance
+primary.part.pos <- primary %>% filter(rdtresults==1)
+length(unique(primary.part.pos$partid)) / length(unique(primary.part.$partid)) # RDT period prevalence
+
+# Microscopy incidence - use total failures and analysis time at risk from stata stset
+314/33988 #daily
+365*314/33988 # annual
+1000 * 365*314/33988 # per 1000 person years
+
+# qPCR incidence - use total failures and analysis time at risk from stata stset
+489/32914 #daily
+365*489/32914 # annual
+1000 * 365*489/32914 # per 1000 person years
+```
+"From March to August 2022, the RDT period-prevalence was 71.7% and the incidence was 3372 and 5422 infections per 1000-person-years by microscopy and qPCR, respectively."
+
+Average number of positive RDT among those who tested positive at least once
+```{r positive RDTs}
+nrow(primary.part.pos)/length(unique(primary.part.pos$partid)) # average number of positive tests per unique individual testing positive RDT
+
+primary.part.micropos <- primary %>% filter(microresults==1 & lasexmicrltr>=0)
+nrow(primary.part.micropos)/length(unique(primary.part.micropos$partid)) # average number of positive tests per unique individual testing positive MICRO
+
+primary.part.pcropos <- primary %>% filter(qpcrcall==1)
+nrow(primary.part.pcropos)/length(unique(primary.part.pcropos$partid)) # average number of positive tests per unique individual testing positive QPCR
+
+```
+"Individuals ever-positive (those who tested positive at least once) by RDT, microscopy, or qPCR, were positive by the corresponding diagnostic test more than once across the study period – on average, 2.4, 2.0, and 2.3 times respectively."
+
+Regression analysis code in Stata do file.
+
+# Entomological results
+```{r ento}
+tapply(entomology$mcolanophelesf, list(entomology$ym), sum) # monthly household vector counts
+
+```
+Human biting rate, infectivity rates, and EIR
+```{r hbr and csp}
+#Human biting rate calculations
+hbr_avg <-entomology %>% 
+  dplyr::select(ym, studytime, B.arm, TV.hbr) %>%
+  summarise(Median = median(TV.hbr, na.rm=TRUE),
+         Mean = mean(TV.hbr, na.rm=TRUE)
+  )
+
+hbr_arm <-entomology %>% 
+  ungroup() %>%
+  dplyr::select(ym, studytime, B.arm, TV.hbr) %>%
+  dplyr::group_by(ym, studytime, B.arm) %>%
+  dplyr::summarise(Median = median(TV.hbr, na.rm=TRUE),
+         Mean = mean(TV.hbr, na.rm=TRUE),
+  )
+
+hbr_arm <- hbr_arm %>% mutate(studytime =ifelse(ym == "22-Mar",0,
+                                       ifelse(ym == "22-Apr",1,
+                                          ifelse(ym == "22-May",2,
+                                             ifelse(ym == "22-Jun",3,
+                                                    ifelse(ym == "22-Jul",4,
+                                                           ifelse(ym == "22-Aug",5,"NA")))))))
+
+
+hbr_zone <-entomology %>% 
+  ungroup() %>%
+  dplyr::select(ym, studytime, B.Zone, TV.hbr) %>%
+  dplyr::group_by(ym, studytime, B.Zone) %>%
+  dplyr::summarise(Median = median(TV.hbr, na.rm=TRUE),
+         Mean = mean(TV.hbr, na.rm=TRUE)
+  )
+
+hbr_zone <- hbr_zone %>% mutate(studytime =ifelse(ym == "22-Mar",0,
+                                       ifelse(ym == "22-Apr",1,
+                                          ifelse(ym == "22-May",2,
+                                             ifelse(ym == "22-Jun",3,
+                                                    ifelse(ym == "22-Jul",4,
+
+                                                                                                                      ifelse(ym == "22-Aug",5,"NA")))))))
+
+# Combine datasets to get species specific hbr
+spec_hh <- anopheline %>%
+  group_by(hh_number, month, an_morph_id) %>%
+  dplyr::summarise(n =n())
+spec_hh_wide <- spread(spec_hh, an_morph_id, n) %>% mutate(month = tolower(month)) %>% dplyr::rename(hhnumber=hh_number)
+entomology1 <- entomology %>%
+  select(hhnumber, ym, TV.numsleep) %>% # merge with hh data
+  mutate(month = ifelse(ym == "22-Mar", "march",
+                        ifelse(ym == "22-Apr", "april",
+                        ifelse(ym == "22-May", "may",
+                        ifelse(ym == "22-Jun", "june",
+                        ifelse(ym == "22-Jul", "july",
+                               ifelse(ym == "22-Aug", "august", "NA"
+                        )))))))
+hbr_spec <- merge(entomology1, spec_hh_wide, by = c("hhnumber", "month"))
+hbr_spec <- hbr_spec %>% mutate(hbr_gam = gambiae/TV.numsleep,
+                                hbr_fun = funestus/TV.numsleep)
+hbr_spec_month <- hbr_spec %>%
+  dplyr::group_by(month) %>%
+  summarise(Median_gam = median(hbr_gam, na.rm=TRUE),
+            Mean_gam = mean(hbr_gam, na.rm=TRUE),
+            Median_fun = median(hbr_fun, na.rm=TRUE),
+         Mean_fun = mean(hbr_fun, na.rm=TRUE)
+  )
+
+hbr_spec_overall <- hbr_spec %>%
+   summarise(Median_gam = median(hbr_gam, na.rm=TRUE),
+            Mean_gam = mean(hbr_gam, na.rm=TRUE),
+            Median_fun = median(hbr_fun, na.rm=TRUE),
+         Mean_fun = mean(hbr_fun, na.rm=TRUE)
+  )
+
+# Circumsporozoite protein presence (infectivity) 
+csp_arm<- anopheline %>%
+  dplyr::rename(B.arm = arm) %>%
+  dplyr:: group_by(studytime, B.arm) %>%
+  dplyr::summarise(pos = sum(elisa_results, na.rm=TRUE),
+            tot = n(),
+            csp = pos/tot) 
+
+csp_arm$csp <- ifelse(csp_arm$studytime==2 | csp_arm$studytime==4, NA, csp_arm$csp)
+
+csp_zone <- anopheline %>%
+  dplyr::rename(B.Zone = Zone) %>%
+  dplyr:: group_by(studytime, B.Zone) %>%
+  dplyr::summarise(pos = sum(elisa_results, na.rm=TRUE),
+            tot = n(),
+            csp = pos/tot) 
+
+csp_zone$csp <- ifelse(csp_zone$studytime==2 | csp_zone$studytime==4, NA, csp_zone$csp)
+
+csp_spec <-as.data.frame(anopheline %>%
+  filter(elisa_results>=0) %>%
+  dplyr:: group_by(an_morph_id) %>%
+  dplyr::summarise(pos = sum(elisa_results, na.rm=TRUE),
+            tot = n(),
+            csp = pos/tot) )
+
+csp_spec_mol <-as.data.frame(anopheline %>% # this filtering looks at molecular confirmation
+  filter(elisa_results>=0) %>%
+  dplyr:: group_by(final_id) %>%
+  dplyr::summarise(pos = sum(elisa_results, na.rm=TRUE),
+            tot = n(),
+            csp = pos/tot) )
+
+# Look at EIR estimates after combining above file with csp data
+hbr_w_csp_arm <- merge(hbr_arm, csp_arm, by = c("studytime","B.arm"))
+hbr_w_csp_EIR_arm <-  hbr_w_csp_arm %>% filter(!is.na(csp))
+hbr_w_csp_EIR_arm$EIR_night = round(hbr_w_csp_EIR_arm$Mean*hbr_w_csp_EIR_arm$csp,2)
+hbr_w_csp_EIR_arm$EIR_month = round(30 * hbr_w_csp_EIR_arm$Mean*hbr_w_csp_EIR_arm$csp,2)
+hbr_w_csp_EIR_arm$EIR_year = round(365 * hbr_w_csp_EIR_arm$Mean*hbr_w_csp_EIR_arm$csp,2)
+
+hbr_w_csp <- merge(hbr_zone, csp_zone, by = c("studytime","B.Zone"))
+hbr_w_csp_EIR <-  hbr_w_csp %>% filter(!is.na(csp))
+hbr_w_csp_EIR$EIR_night = round(hbr_w_csp_EIR$Mean*hbr_w_csp_EIR$csp,2)
+hbr_w_csp_EIR$EIR_month = round(30 * hbr_w_csp_EIR$Mean*hbr_w_csp_EIR$csp,2)
+hbr_w_csp_EIR$EIR_year = round(365 * hbr_w_csp_EIR$Mean*hbr_w_csp_EIR$csp,2)
+
+hbr_w_csp_spec_EIR <- csp_spec %>% mutate(hbr = as.numeric(ifelse(an_morph_id=="funestus",hbr_spec_overall[4],
+                                            ifelse(an_morph_id=="gambiae", hbr_spec_overall[2],"NA"))),
+                                      EIR_night = round(hbr*csp,2),
+                                      EIR_month = round(30 * hbr*csp,2),
+                                      EIR_year = round(365 * hbr*csp,2)) %>%
+  filter(an_morph_id == "funestus" |  an_morph_id == "gambiae")
+
+hbr_w_csp_spec_EIR # EIR table
+hbr_w_csp_spec_EIR[1,8] + hbr_w_csp_spec_EIR[2,8] # total EIR
+```
+"The EIR was highest in March,  and species-level annual EIR estimates from CDC light traps for An. funestus and An. gambiae, were 16.7 and 17.2, respectively for an overall EIR of 33.9 (Figure 3, Supplement, Table S1a)."
+
+Regression analysis code in Stata do file.
+
+#Figures 
+```{r figure settings}
+# Define color codes and settings for graphs
+## Colors: https://www.nceas.ucsb.edu/sites/default/files/2020-04/colorPaletteCheatsheet.pdf
+pallete2 <- c("slategray","darkolivegreen3")
+pallete2.1 = c("gray", "black")
+pallete4 <- c("darkgreen","orange","navy", "red")
+pallete4age <- c("#4B0055", "#007094", "#00BE7D", "#FDE333")
+pallete2feb <-c("navy", "red4")
+fills =  c("darkblue","navy", "gray46", "black" )
+lines3 = c(1,2,3,4)
+pd <- position_dodge(1/10) # move them .5 to the left and right
+```
+Figure 1 is GIS Map
+
+Figure 2
+```{r figure 2 ento}
+library(gridExtra)
+lanoph_graph <- anopheline %>% select(an_morph_id, studytime, arm, Zone) %>%
+  mutate(group = paste0(an_morph_id),
+         order = paste0(Zone, studytime),
+         ) %>%
+  filter(an_morph_id=="funestus" |an_morph_id=="gambiae") %>% 
+  mutate(group = ifelse(group=="funestus", "zfunestus", group)) %>%
+  filter(!is.na(arm)) %>% #need to check this
+  select(order, group)
+
+#add empty rows for May and July
+empty <- c("Lakeside, Sprayed6", "gambiae")
+empty2 <- c("Lakeside, Not Sprayed6", "gambiae")
+empty3 <- c("Inland, Sprayed6", "gambiae")
+empty4 <- c("Inland, Not Sprayed6", "gambiae")
+
+lanoph_graph1 <- as.data.frame(rbind(lanoph_graph, empty, empty2, empty3, empty4))
+hbr_w_csp_EIR_arm <- as.data.frame(rbind(hbr_w_csp_EIR_arm, empty, empty2, empty3, empty4, empty5, empty6, empty7, empty8))
+
+ento_plot1 <-ggplot(lanoph_graph1, aes(x=factor(order), fill=group)) +
+  geom_bar(aes(),position=, color = "black") +
+  labs(x='', y ='Total vector counts', fill="Species") +
+  scale_fill_manual(values = c("orange","navy"), labels = c("An. gambiae","An. funestus"))+ 
+  #ggtitle("Vector Species by Month") +
+  scale_x_discrete(labels = c("Mar", "Apr", "May", "Jun", "Jul", "Aug"," ","Mar", "Apr", "May", "Jun", "Jul", "Aug"," ","Mar", "Apr", "May", "Jun", "Jul", "Aug"," ","Mar", "Apr", "May", "Jun", "Jul", "Aug"," "))+
+  theme_classic() +
+  theme(title = element_text(size=14, face="bold"),
+    axis.text.x = element_text(angle = 90, size = 14),
+    axis.text.y = element_text(size = 12),
+  axis.title.x = element_text(size = 18),
+  axis.title.y = element_text(size = 18),
+  legend.title = element_text(size = 14),
+  legend.text = element_text(size=12),
+        axis.ticks.x = element_blank()) +
+  geom_vline(aes(xintercept =7)) +
+  geom_vline(aes(xintercept =14)) +
+  geom_vline(aes(xintercept =21)) +
+  geom_vline(aes(xintercept =28)) +
+  annotate("text", x = 3.75, y = 900, label = "Not Sprayed, \nInland", size =5, fontface="bold", color = pallete4[1])+
+  annotate("text", x = 10.5, y = 900, label = "Sprayed, \nInland", size =5, fontface="bold", color = pallete4[2])+
+  annotate("text", x = 17.5, y = 900, label = "Not Sprayed, \nLakeside", size =5, fontface="bold", color = pallete4[3])+
+  annotate("text", x = 24.5, y = 900, label = "Sprayed, \nLakeside", size =5, fontface="bold", color = pallete4[4])
+
+
+ento_plot2 <- ggplot() + 
+  stat_summary(data = lento_shorthh, aes(x = factor(studytime), y = mcolanophelesf, color = factor(B.Zone), group = factor(B.Zone)), geom = "line", fun = mean, size=1.5) +
+  scale_color_manual(
+    name = "Cluster",
+    values = pallete4,
+    labels = c("Not Sprayed, Inland", "Sprayed, Inland", "Not Sprayed, Lakeside", "Sprayed, Lakeside")) +
+  #ylim(c(0, 30)) +
+  scale_x_discrete(labels = c("March", "April","May","June","July", "August")) +
+ labs(x = "", y = "Mean household nightly anoph. count") +
+ theme_classic() +
+  geom_textvline(label="Pilot Spray", xintercept=2,lwd=4,colour="blue", alpha = 0.35, hjust=.4, size = 6) +
+  theme(title = element_text(size=14, face="bold"),
+  axis.title.x = element_text(size = 18),
+  axis.title.y = element_text(size = 18),
+  legend.title = element_text(size = 14),
+  legend.text = element_text(size=12),
+  axis.text.x = element_text(size = 14),
+  axis.text.y = element_text(size = 14),
+  legend.background = element_rect(linetype = 1, size = 0.25, colour = 1),
+   legend.position="top")
+
+#add empty rows for May and July
+empty <- c(2,'Inland, Not Sprayed',NA, NA,NA,NA,NA,NA,NA,1.565,NA, NA)
+empty2 <- c(2,'Lakeside, Not Sprayed',NA, NA,NA,NA,NA,NA,NA,.01,NA,NA)
+empty3 <- c(2,'Lakeside, Sprayed',NA, NA,NA,NA,NA,NA,NA,.01,NA,NA)
+empty4 <- c(2,'Inland, Sprayed',NA, NA,NA,NA,NA,NA,NA,1.585,NA,NA)
+empty5 <- c(4,'Inland, Not Sprayed',NA, NA,NA,NA,NA,NA,NA,1.39,NA,NA)
+empty6 <- c(4,'Lakeside, Not Sprayed',NA, NA,NA,NA,NA,NA,NA,0,NA,NA)
+empty7 <- c(4,'Lakeside, Sprayed',NA, NA,NA,NA,NA,NA,NA,0,NA,NA)
+empty8 <- c(4,'Inland, Sprayed',NA, NA,NA,NA,NA,NA,NA,1.19,NA,NA)
+
+hbr_w_csp_EIR <- as.data.frame(rbind(hbr_w_csp_EIR, empty, empty2, empty3, empty4, empty5, empty6, empty7, empty8))
+hbr_w_csp_EIR_arm <- as.data.frame(rbind(hbr_w_csp_EIR_arm, empty, empty2, empty3, empty4, empty5, empty6, empty7, empty8))
+
+hbr_w_csp_EIR_arm.use <- hbr_w_csp_EIR_arm %>% filter(!is.na(B.arm)) %>% mutate(EIR_month = as.numeric(EIR_month))
+ hbr_w_csp_EIR <- hbr_w_csp_EIR %>% filter(!is.na(B.Zone))
+table1b_eir <- hbr_w_csp_EIR
+
+EIR_month_zone <- ggplot(data = hbr_w_csp_EIR,
+       aes(x = factor(studytime), y = as.numeric(EIR_month), group = factor(B.Zone), color = factor(B.Zone)), alpha=.5) +
+    geom_point(size = 0.01) + geom_line(lwd=1.5)+
+    ylim(c(0,6)) +
+    labs(x='Month of 2022', y ='Estimated infectious bites per month') +
+    #ggtitle("Estimated Entomological Innoculation Rates") +
+    theme_classic() +
+    scale_x_discrete(labels = c("March", "April","May","June", "July", "August")) +
+  geom_textvline(label="Pilot Spray", xintercept=as.numeric(lento_shorthh$studytime[6]),lwd=4,colour="blue", alpha = 0.35, hjust=.8, size = 6) +
+scale_colour_manual(name = 'Cluster', , values=pallete4, labels = c('Not Sprayed Inland','Sprayed Inland','Not Sprayed Lakeside','Sprayed Lakeside')) +
+  theme(title = element_text(size=14, face="bold"),
+  axis.title.x = element_text(size = 18),
+  axis.title.y = element_text(size = 18),
+  legend.title = element_text(size = 14),
+  legend.text = element_text(size=12),
+  axis.text.x = element_text(size = 14),
+  axis.text.y = element_text(size = 14))+
+  guides(color = FALSE)
+
+
+  scale_colour_discrete(na.translate = F, name = "Cluster")  
+    stat_summary(aes(group = factor(arm)), geom = "line", fun = median, width=0.1, size=1)
+    #geom_errorbar(mapping=aes(x=ym, ymin=Mean-SD, ymax=Mean+SD), width=0.1, size=1, color="black")
+
+entoplotall <-grid.arrange(
+  top = textGrob("a", x = unit(0.05, "npc"), y = unit(0.95, "npc"), just = c("left", "top"), gp = gpar(fontsize = 20,fontface = "bold")),
+  ento_plot2,
+  right = textGrob("c", x = unit(0.05, "npc"), y = unit(0.99, "npc"), just = c("left", "top"), gp = gpar(fontsize = 20,fontface = "bold")),
+  ento_plot1,
+  bottom = textGrob("b", x = unit(0.05, "npc"), y = unit(0.95, "npc"), just = c("left", "top"), gp = gpar(fontsize = 20,fontface = "bold")),
+EIR_month_zone, ncol =2
+)
+
+
+ggsave(file = "/Users/annemartin/Documents/PhD/ICEMR/Nchelenge/Pilot IRS/Drafts/July 2024 JID Submission/Final code and datasets/Public code outputs/entoplotall.png", width = 24, height = 16, entoplotall)
+```
+
+```{r Figure 3}
+lmemhhpartpcr =  primary %>% filter(isparticipating=="1" & !is.na(qpcrcall)) # remove those who did not participate and have non na micro results
+lmemhhpart =  primary %>% filter(isparticipating=="1" & !is.na(rdtresults)) # remove those who did not participate and have non na rdt results
+lmemhhpartmicro =  primary %>% filter(isparticipating=="1" & !is.na(microresults)) # remove those who did not participate and have non na micro results
+
+
+
+#https://journal.sjdm.org/14/141112a/summarySE.r # function
+#troubleshooting: https://stackoverflow.com/questions/60403256/summaryse-function-throwing-error-cant-rename-columns-that-dont-exist-x-th
+library(Rmisc)
+## Gives count, mean, standard deviation, standard error of the mean, and confidence interval (default 95%).
+##   data: a data frame.
+##   measurevar: the name of a column that contains the variable to be summariezed
+##   groupvars: a vector containing names of columns that contain grouping variables
+##   na.rm: a boolean that indicates whether to ignore NA's
+##   conf.interval: the percent range of the confidence interval (default is 95%)
+summarySE <- function(data=NULL, measurevar, groupvars=NULL, na.rm=FALSE,
+                      conf.interval=.95, .drop=TRUE) {
+    library(plyr)
+
+    # New version of length which can handle NA's: if na.rm==T, don't count them
+    length2 <- function (x, na.rm=FALSE) {
+        if (na.rm) sum(!is.na(x))
+        else       length(x)
+    }
+
+    # This does the summary. For each group's data frame, return a vector with
+    # N, mean, and sd
+    datac <- ddply(data, groupvars, .drop=.drop,
+      .fun = function(xx, col) {
+        c(N    = length2(xx[[col]], na.rm=na.rm),
+          mean = mean   (xx[[col]], na.rm=na.rm),
+          sd   = sd     (xx[[col]], na.rm=na.rm)
+        )
+      },
+      measurevar
+    )
+
+    # Rename the "mean" column    
+    datac <- rename(datac, c("mean" = measurevar))
+
+    datac$se <- datac$sd / sqrt(datac$N)  # Calculate standard error of the mean
+
+    # Confidence interval multiplier for standard error
+    # Calculate t-statistic for confidence interval: 
+    # e.g., if conf.interval is .95, use .975 (above/below), and use df=N-1
+    ciMult <- qt(conf.interval/2 + .5, datac$N-1)
+    datac$ci <- datac$se * ciMult
+
+    return(datac)
+}
+
+sumdat = summarySE(data = lmemhhpart, measurevar="rdtresults", groupvars=c("arm","ym"))
+sumdat$ym <- factor(sumdat$ym, levels=c("22-Mar", "22-Apr", "22-May", "22-Jun", "22-Jul","22-Aug"))
+sumdat$Outcome_Type = 1
+sumdatmicro = summarySE(data = lmemhhpartmicro, measurevar="microresults", groupvars=c("arm","ym"))
+sumdatmicro$ym <- factor(sumdatmicro$ym, levels=c("22-Mar", "22-Apr", "22-May", "22-Jun", "22-Jul","22-Aug"))
+sumdatmicro$Outcome_Type = 2
+sumdatqpcr = summarySE(data = lmemhhpartpcr, measurevar="qpcrcall", groupvars=c("arm","ym"))
+pd <- position_dodge(1/10) # move them .5 to the left and right
+sumdatqpcr$ym <- factor(sumdatqpcr$ym, levels=c("22-Mar", "22-Apr", "22-May", "22-Jun", "22-Jul","22-Aug"))
+ sumdatqpcr$Outcome_Type = 3
+# Make a master dataset for by month measurments
+sumdat <- sumdat %>% dplyr::rename(result = rdtresults) #%>% filter(!is.na())
+sumdatmicro <- sumdatmicro %>% dplyr::rename(result = microresults)
+sumdatqpcr <- sumdatqpcr %>% dplyr::rename(result = qpcrcall)
+sumdat_mas <- rbind(sumdat, sumdatmicro, sumdatqpcr)
+
+# Master plot over time
+shapes2 <- c(21, 22, 23, 25)
+lines <- c(1,1,2,2,4,4,3,3)
+breaks = 3 *c(0.2, 0.4, 0.6, 0.8, 1.0) # manually set these breaks based on values of log density
+pallete2.1 = c("gray", "black")
+
+convert_ratio2 <- function(x) {
+  x /(1/3)
+}
+
+sumdat_mas$group = paste0(sumdat_mas$Outcome_Type,sumdat_mas$arm)
+library(geomtextpath)
+sumdat_mas <- sumdat_mas %>% filter(ym!="22-Sep")
+figure1_master<- ggplot(sumdat_mas, aes(x=ym, y=result, color = as.factor(arm), fill = as.factor(arm),  group=group, linetype =as.factor(Outcome_Type), shape = as.factor(Outcome_Type))) +
+  theme_classic() +
+  geom_line() +
+  geom_point(position=pd, size = 3) +
+ 	#geom_errorbar(aes(ymin=result-ci, ymax=result+ci), width=.1, position=pd) +
+  #ggtitle("Epidemiological Outcomes") +
+  xlab("Month of 2022") + ylab("Prevalence") +
+  ylim(0,0.7)+
+  geom_textvline(label="Pilot Spray", xintercept=2,lwd=4,colour="blue", alpha = 0.35, hjust=.1) + 
+  scale_x_discrete(labels = c("March", "April", "May", "June", "July", "August")) +
+  scale_fill_manual(values=pallete2.1, labels = c("Not Sprayed", "Sprayed"), name = "Arm") +
+  scale_colour_manual(values=pallete2.1, labels = c("Not Sprayed", "Sprayed"), name = "Arm") +
+  scale_linetype_manual(values = c(1,2,4), labels = c("RDT", "Microscopy", "qPCR"), name = "Outcome Type") +
+  scale_shape_manual(values = c(16, 17, 18), labels = c("RDT", "Microscopy", "qPCR"), name = "Outcome Type") +  # Define shapes for each Outcome Type
+  theme(title = element_text(size=14, face="bold"),
+  axis.title.x = element_text(size = 12),
+  axis.title.y = element_text(size = 12),
+  legend.title = element_text(size = 12)) #+
+  #scale_y_continuous(sec.axis = sec_axis(~convert_ratio2(.), name = "Log Parasites/Microliter", breaks = breaks, labels = breaks)) +
+   #                  theme(axis.line.y.right = element_line(linetype=3),
+    #                       legend.title = element_text(size=10))
+
+ggsave(file = "/Users/annemartin/Documents/PhD/ICEMR/Nchelenge/Pilot IRS/Drafts/July 2024 JID Submission/Final code and datasets/Public code outputs/figure3.png", width = 10, height = 6, figure1_master)
+
+```
+Figure 4 in stata
+
+Figure 5
+```{r figure 5}
+# Create the vertical forest plot for stata models
+shapes5 <- c(23, 21, 24, 25, 22)
+colors5 <- c("gray","black","black", "black" ,"black")
+
+#Prepare the dataframe
+rdt_vec_stata <- c(2, 0.98, 0.14, 6.95)
+micro_vec_stata <- c(4, 0.31, 0.05,1.93)
+qpcr_vec_stata <- c(3, 1.22,	0.76,1.95)
+haz_vec_stata <- c(5, 0.477, 0.292 ,0.780)
+ento_vec_stata <- c(1, 2.17, 0.87,5.43)
+
+data_fp_plot_stata <-as.data.frame(rbind(ento_vec_stata, rdt_vec_stata, qpcr_vec_stata ,micro_vec_stata, haz_vec_stata )) 
+colnames(data_fp_plot_stata) <- c("Outcome_Type", "Estimate", "Lower_CI", "Upper_CI")
+data_fp_plot_stata$Time <- "m012345"
+data_fp_plot_stata$Time <- factor(data_fp_plot_stata$Time, levels = c("m012345"), labels = c("Through August"))
+
+fplotstata <- ggplot(data_fp_plot_stata, aes(x = Time, y = Estimate)) +
+  geom_pointrange(aes(ymin = Lower_CI, ymax = Upper_CI, shape = factor(Outcome_Type), color = factor(Outcome_Type), fill= factor(Outcome_Type)), position = position_dodge2(w = 0.5), size = 1) +
+  scale_shape_manual(values = shapes5, labels = c("Anopheles Counts", "RDT Prevalence", "qPCR Incidence","Microscopy Incidence", "Microscopy Hazard")) +
+  scale_color_manual(values = colors5, labels = c("Anopheles Counts", "RDT Prevalence", "qPCR Incidence","Microscopy Incidence", "Microscopy Hazard")) +
+  scale_fill_manual(values = colors5, labels = c("Anopheles Counts", "RDT Prevalence", "qPCR Incidence","Microscopy Incidence", "Microscopy Hazard")) +
+  geom_hline(yintercept = 1, linetype = "dashed", color = "gray40") +
+  labs(y = "Change in sprayed / Change in unsprayed", shape = "Outcome", color = "Outcome", fill = "Outcome") +
+  #scale_x_discrete(labels = c("May", "June", "July", "August")) +
+  coord_cartesian(ylim = c(0,2.5)) +
+  theme_classic() + # Gives white background
+  theme(axis.text.y = element_text(color = "black"),
+        axis.title.y = element_text(color = "black"),
+        axis.title.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        axis.text.x = element_blank(),
+        axis.line.x = element_blank())
+
+fplotstata
+
+ggsave("/Users/annemartin/Documents/PhD/ICEMR/Nchelenge/Pilot IRS/Drafts/July 2024 JID Submission/Final code and datasets/Public code outputs/figure5.jpg",width = 10, height = 6,fplotstata)
+```
